@@ -1,19 +1,24 @@
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, UploadFile, File
-from PyPDF2 import PdfReader
-from groq import Groq
-from dotenv import load_dotenv
-import os
+from fastapi.middleware.cors import CORSMiddleware
 
-# Load environment variables
+from dotenv import load_dotenv
+
+from groq import Groq
+
+import os
+import fitz
+
+# Load .env
 load_dotenv()
 
 # Groq Client
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-
+client = Groq(
+    api_key=os.getenv("GROQ_API_KEY")
+)
 
 app = FastAPI()
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,51 +27,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_FOLDER = "uploads"
-
-# Create uploads folder automatically
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-
-@app.get("/")
-def home():
-    return {"message": "InterviewAI Pro Backend Running"}
-
+# Upload Resume API
 @app.post("/upload-resume/")
 async def upload_resume(file: UploadFile = File(...)):
 
-    file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+    # Save uploaded file temporarily
+    contents = await file.read()
 
-    # Save uploaded file
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+    with open(file.filename, "wb") as f:
+        f.write(contents)
 
     # Read PDF
-    reader = PdfReader(file_path)
-
     text = ""
 
-    for page in reader.pages:
-        extracted = page.extract_text()
+    pdf = fitz.open(file.filename)
 
-        if extracted:
-            text += extracted
+    for page in pdf:
+        text += page.get_text()
 
     # AI Prompt
     prompt = f"""
-    This is a candidate resume:
+    Analyze this resume and generate 5 professional interview questions.
 
+    Resume:
     {text}
-
-    Generate 5 professional interview questions based on the resume skills.
     """
 
-    # Generate AI response
+    # Groq AI
     chat_completion = client.chat.completions.create(
         messages=[
             {
                 "role": "user",
-                "content": prompt,
+                "content": prompt
             }
         ],
         model="llama-3.1-8b-instant",
@@ -78,8 +70,10 @@ async def upload_resume(file: UploadFile = File(...)):
         "filename": file.filename,
         "interview_questions": questions
     }
+
+# AI Chat API
 @app.post("/chat/")
-async def chat_with_ai(data: dict):
+async def ai_chat(data: dict):
 
     user_message = data.get("message")
 
@@ -87,13 +81,7 @@ async def chat_with_ai(data: dict):
         messages=[
             {
                 "role": "system",
-                "content": """
-                You are a professional AI interviewer.
-
-                Ask technical interview questions.
-                Give realistic HR interview responses.
-                Keep responses short and professional.
-                """
+                "content": "You are a professional AI interviewer."
             },
             {
                 "role": "user",
@@ -103,8 +91,8 @@ async def chat_with_ai(data: dict):
         model="llama-3.1-8b-instant",
     )
 
-    ai_response = chat_completion.choices[0].message.content
+    response = chat_completion.choices[0].message.content
 
     return {
-        "response": ai_response
+        "response": response
     }
